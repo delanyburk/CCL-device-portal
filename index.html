@@ -2093,9 +2093,10 @@ async function confirmNotifyPhone(){
   try {
     const now = new Date().toISOString();
     const phoneExpires = new Date(Date.now() + 7*24*60*60*1000).toISOString();
+    const toRenumber = new Set();
     for(const id of notifyIds){
       // Check if already has an expiry (from prior email notification) - don't reset it
-      const curr = await sbGet('device_requests', `?id=eq.${id}&select=status,expires_at,notified_at`);
+      const curr = await sbGet('device_requests', `?id=eq.${id}&select=status,expires_at,notified_at,device_type,campus`);
       const hasExpiry = curr[0] && curr[0].expires_at;
       const currStatus = curr[0] && curr[0].status;
       const patch = { notified_phone: true };
@@ -2104,8 +2105,14 @@ async function confirmNotifyPhone(){
       if(currStatus === 'waitlisted'){
         patch.status = 'notified';
         if(!hasExpiry) patch.notified_at = now;
+        toRenumber.add(curr[0].device_type + '|' + curr[0].campus);
       }
       await sbPatch('device_requests', `?id=eq.${id}`, patch);
+    }
+    // Renumber the waitlist for each affected device+campus so #1 is always next in line
+    for(const key of toRenumber){
+      const [dType, camp] = key.split('|');
+      await renumberWaitlist(dType, camp);
     }
     await logActivity('notified_phone', notifyIds[0], notifyIds.length > 1 ? notifyIds.length + ' students' : null);
     closeModal('modal-notify');
@@ -2145,15 +2152,33 @@ function openEmailDraft(){
   window.location.href = mailto;
 }
 
+// Renumber remaining waitlisted entries for a device+campus so the next
+// person up is always #1. Only ever touches waitlist_position — never status —
+// so it cannot change who is waitlisted vs notified vs anything else.
+async function renumberWaitlist(deviceType, campus){
+  try {
+    const campusFilter = campus === 'shared' ? '' : '&campus=eq.'+campus;
+    const entries = await sbGet('device_requests',
+      `?device_type=eq.${deviceType}${campusFilter}&status=eq.waitlisted&order=waitlist_position.asc&select=id,waitlist_position`);
+    for(let i = 0; i < entries.length; i++){
+      const correctPos = i + 1;
+      if(entries[i].waitlist_position !== correctPos){
+        await sbPatch('device_requests', `?id=eq.${entries[i].id}`, { waitlist_position: correctPos });
+      }
+    }
+  } catch(e){ console.warn('renumberWaitlist error:', e.message); }
+}
+
 async function confirmNotify(){
   const btn = document.getElementById('btn-do-notify');
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Saving...';
   try {
     const expires = new Date(Date.now() + 7*24*60*60*1000).toISOString();
     const now = new Date().toISOString();
+    const toRenumber = new Set();
     for(const id of notifyIds){
       // Check current status to decide how to update
-      const curr = await sbGet('device_requests', `?id=eq.${id}&select=status,expires_at`);
+      const curr = await sbGet('device_requests', `?id=eq.${id}&select=status,expires_at,device_type,campus`);
       const status = curr[0] && curr[0].status;
       const hasExpiry = curr[0] && curr[0].expires_at;
       if(status === 'waitlisted'){
@@ -2161,10 +2186,16 @@ async function confirmNotify(){
         const patch = { status:'notified', notified_email: true };
         if(!hasExpiry){ patch.notified_at = now; patch.expires_at = expires; }
         await sbPatch('device_requests', `?id=eq.${id}`, patch);
+        toRenumber.add(curr[0].device_type + '|' + curr[0].campus);
       } else {
         // FCFS or already notified: stay in place, just mark email notified
         await sbPatch('device_requests', `?id=eq.${id}`, { notified_email: true, notified_at: hasExpiry ? curr[0].notified_at : now });
       }
+    }
+    // Renumber the waitlist for each affected device+campus so #1 is always next in line
+    for(const key of toRenumber){
+      const [dType, camp] = key.split('|');
+      await renumberWaitlist(dType, camp);
     }
     await logActivity('notified_email', notifyIds[0], notifyIds.length > 1 ? notifyIds.length + ' students' : null);
     closeModal('modal-notify');
