@@ -1768,6 +1768,9 @@ async function loadWaitlistPanel(panelId){
           <span class="toggle-label" style="color:${isOn?'var(--success)':'var(--text-light)'}">${isOn?'ON':'OFF'}</span>
         </div>
       </div>
+      <div style="padding:0 16px 14px">
+        <button class="btn btn-outline btn-sm" onclick="fixWaitlistNumbering('${deviceId}','${dbCampus}','${panelId}')" title="Renumber the waitlist so #1 is always the next person in line, with no gaps.">🔧 Fix Numbering</button>
+      </div>
     </div>`;
 
     // Notified section
@@ -2112,7 +2115,8 @@ async function confirmNotifyPhone(){
     // Renumber the waitlist for each affected device+campus so #1 is always next in line
     for(const key of toRenumber){
       const [dType, camp] = key.split('|');
-      await renumberWaitlist(dType, camp);
+      try { await renumberWaitlist(dType, camp); }
+      catch(e){ console.error('renumberWaitlist failed after notify:', e); alert('Notified successfully, but could not renumber the remaining waitlist: ' + e.message + '. Use the "Fix Numbering" button on the waitlist panel to correct it.'); }
     }
     await logActivity('notified_phone', notifyIds[0], notifyIds.length > 1 ? notifyIds.length + ' students' : null);
     closeModal('modal-notify');
@@ -2155,18 +2159,43 @@ function openEmailDraft(){
 // Renumber remaining waitlisted entries for a device+campus so the next
 // person up is always #1. Only ever touches waitlist_position — never status —
 // so it cannot change who is waitlisted vs notified vs anything else.
+// Renumber remaining waitlisted entries for a device+campus so the next
+// person up is always #1. Only ever touches waitlist_position — never status —
+// so it cannot change who is waitlisted vs notified vs anything else.
+// Throws on failure (callers decide whether to surface it) instead of failing silently.
 async function renumberWaitlist(deviceType, campus){
-  try {
-    const campusFilter = campus === 'shared' ? '' : '&campus=eq.'+campus;
-    const entries = await sbGet('device_requests',
-      `?device_type=eq.${deviceType}${campusFilter}&status=eq.waitlisted&order=waitlist_position.asc&select=id,waitlist_position`);
-    for(let i = 0; i < entries.length; i++){
-      const correctPos = i + 1;
-      if(entries[i].waitlist_position !== correctPos){
-        await sbPatch('device_requests', `?id=eq.${entries[i].id}`, { waitlist_position: correctPos });
-      }
+  const campusFilter = campus === 'shared' ? '' : '&campus=eq.'+campus;
+  const entries = await sbGet('device_requests',
+    `?device_type=eq.${deviceType}${campusFilter}&status=eq.waitlisted&order=waitlist_position.asc&select=id,waitlist_position`);
+  let changed = 0;
+  for(let i = 0; i < entries.length; i++){
+    const correctPos = i + 1;
+    if(entries[i].waitlist_position !== correctPos){
+      await sbPatch('device_requests', `?id=eq.${entries[i].id}`, { waitlist_position: correctPos });
+      changed++;
     }
-  } catch(e){ console.warn('renumberWaitlist error:', e.message); }
+  }
+  return { total: entries.length, changed };
+}
+
+// Manual fix-it button on each waitlist panel — renumbers immediately and reports
+// exactly what happened, so staff can see it working (or see a clear error) rather
+// than wondering whether it silently did nothing.
+async function fixWaitlistNumbering(deviceId, campus, panelId){
+  const btn = event ? event.target : null;
+  if(btn){ btn.disabled = true; const orig = btn.textContent; btn.textContent = 'Fixing...';
+    setTimeout(()=>{ btn.disabled=false; btn.textContent=orig; }, 3000); }
+  try {
+    const result = await renumberWaitlist(deviceId, campus);
+    loadWaitlistPanel(panelId);
+    if(result.changed > 0){
+      alert('✓ Fixed. ' + result.changed + ' of ' + result.total + ' waitlist position(s) were out of order and have been renumbered starting from #1.');
+    } else {
+      alert('✓ Checked ' + result.total + ' waitlisted entr' + (result.total===1?'y':'ies') + ' — numbering was already correct, starting from #1.');
+    }
+  } catch(e){
+    alert('⛔ Could not renumber the waitlist: ' + e.message);
+  }
 }
 
 async function confirmNotify(){
@@ -2195,7 +2224,8 @@ async function confirmNotify(){
     // Renumber the waitlist for each affected device+campus so #1 is always next in line
     for(const key of toRenumber){
       const [dType, camp] = key.split('|');
-      await renumberWaitlist(dType, camp);
+      try { await renumberWaitlist(dType, camp); }
+      catch(e){ console.error('renumberWaitlist failed after notify:', e); alert('Notified successfully, but could not renumber the remaining waitlist: ' + e.message + '. Use the "Fix Numbering" button on the waitlist panel to correct it.'); }
     }
     await logActivity('notified_email', notifyIds[0], notifyIds.length > 1 ? notifyIds.length + ' students' : null);
     closeModal('modal-notify');
