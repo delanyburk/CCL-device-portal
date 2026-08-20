@@ -1769,7 +1769,7 @@ async function loadWaitlistPanel(panelId){
         </div>
       </div>
       <div style="padding:0 16px 14px">
-        <button class="btn btn-outline btn-sm" onclick="fixWaitlistNumbering('${deviceId}','${dbCampus}','${panelId}')" title="Renumber the waitlist so #1 is always the next person in line, with no gaps.">🔧 Fix Numbering</button>
+        <button class="btn btn-outline btn-sm" onclick="fixWaitlistNumbering(this,'${deviceId}','${dbCampus}','${panelId}')" title="Renumber the waitlist so #1 is always the next person in line, with no gaps.">🔧 Fix Numbering</button>
       </div>
     </div>`;
 
@@ -2181,12 +2181,12 @@ async function renumberWaitlist(deviceType, campus){
 // Manual fix-it button on each waitlist panel — renumbers immediately and reports
 // exactly what happened, so staff can see it working (or see a clear error) rather
 // than wondering whether it silently did nothing.
-async function fixWaitlistNumbering(deviceId, campus, panelId){
-  const btn = event ? event.target : null;
-  if(btn){ btn.disabled = true; const orig = btn.textContent; btn.textContent = 'Fixing...';
-    setTimeout(()=>{ btn.disabled=false; btn.textContent=orig; }, 3000); }
+async function fixWaitlistNumbering(btnEl, deviceId, campus, panelId){
+  let orig = null;
+  if(btnEl){ btnEl.disabled = true; orig = btnEl.textContent; btnEl.textContent = 'Fixing...'; }
   try {
     const result = await renumberWaitlist(deviceId, campus);
+    if(btnEl){ btnEl.disabled = false; btnEl.textContent = orig; }
     loadWaitlistPanel(panelId);
     if(result.changed > 0){
       alert('✓ Fixed. ' + result.changed + ' of ' + result.total + ' waitlist position(s) were out of order and have been renumbered starting from #1.');
@@ -2194,6 +2194,7 @@ async function fixWaitlistNumbering(deviceId, campus, panelId){
       alert('✓ Checked ' + result.total + ' waitlisted entr' + (result.total===1?'y':'ies') + ' — numbering was already correct, starting from #1.');
     }
   } catch(e){
+    if(btnEl){ btnEl.disabled = false; btnEl.textContent = orig; }
     alert('⛔ Could not renumber the waitlist: ' + e.message);
   }
 }
