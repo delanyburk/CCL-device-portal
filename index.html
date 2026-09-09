@@ -1894,16 +1894,17 @@ async function loadWaitlistPanel(panelId){
         <div class="table-header">
           <div class="table-title" style="color:var(--text-light)">📁 Past Entries (${past.length})</div>
         </div>
-        <table><thead><tr><th>#</th><th>Student</th><th>Contact</th><th>Requested</th><th>Notified</th><th>Status</th></tr></thead><tbody>`;
+        <table><thead><tr><th>#</th><th>Student</th><th>Contact</th><th>Requested</th><th>Notified</th><th>Status</th><th>Actions</th></tr></thead><tbody>`;
       past.forEach(r=>{
         const isPickedUp = r.status==='picked-up';
+        const canRequeue = !isPickedUp; // picked-up already has the device — doesn't make sense to re-queue
         html+=`<tr style="opacity:0.75">
           <td>${r.waitlist_position ? `<span class="pos-num">${r.waitlist_position}</span>` : '—'}</td>
           <td>
             <div class="td-name">${r.first_name} ${r.last_name} ${r.language==='es'?'<span style="font-size:10px;background:#f5f3ff;color:#6d28d9;padding:1px 7px;border-radius:10px;font-weight:700;margin-left:4px">ES</span>':''}</div>
             <div class="td-id" onclick="openStudentHistory('${r.student_id}','${r.first_name} ${r.last_name}')" style="cursor:pointer;color:var(--green);text-decoration:underline">${r.student_id}</div>
           </td>
-          <td><div style="font-size:12px">${r.email||'—'}</div></td>
+          <td><div style="font-size:12px">${r.email||'—'}</div><div style="font-size:12px;color:var(--text-light)">${fmtPhone(r.phone)}</div></td>
           <td style="font-size:12px">${fmtDT(r.requested_at)}</td>
           <td style="font-size:12px">${r.notified_at ? fmtDT(r.notified_at) : '—'}</td>
           <td>
@@ -1913,6 +1914,9 @@ async function loadWaitlistPanel(panelId){
               ? `<span class="status status-expired">✗ Expired ${r.expires_at ? fmtDate(r.expires_at) : ''}</span>`
               : `<span class="status status-cancelled">✗ No Longer Needed</span>`
             }
+          </td>
+          <td>
+            ${canRequeue ? `<button class="btn btn-outline btn-sm" onclick="moveBackToWaitlist('${r.id}','${deviceId}','${dbCampus}','${panelId}')">↩ Move to Waitlist</button>` : ''}
           </td>
         </tr>`;
       });
@@ -2163,6 +2167,32 @@ function openEmailDraft(){
 // person up is always #1. Only ever touches waitlist_position — never status —
 // so it cannot change who is waitlisted vs notified vs anything else.
 // Throws on failure (callers decide whether to surface it) instead of failing silently.
+// Move a single entry from Past Entries back into the active waitlist queue,
+// assigning it the next available position at the bottom. Only ever touches
+// the ONE entry being moved — no other entries' statuses or positions change.
+async function moveBackToWaitlist(id, deviceType, campus, panelId){
+  if(!confirm('Move this student back onto the waitlist queue? They will be added at the bottom of the current queue.')) return;
+  try {
+    const campusFilter = campus === 'shared' ? '' : '&campus=eq.'+campus;
+    const existing = await sbGet('device_requests',
+      `?device_type=eq.${deviceType}${campusFilter}&status=eq.waitlisted&select=waitlist_position&order=waitlist_position.desc&limit=1`);
+    const newPos = existing.length ? (existing[0].waitlist_position || 0) + 1 : 1;
+    await sbPatch('device_requests', `?id=eq.${id}`, {
+      status: 'waitlisted',
+      waitlist_position: newPos,
+      notified_at: null,
+      expires_at: null,
+      picked_up_at: null,
+      updated_at: new Date().toISOString()
+    });
+    await logActivity('requeued', id, 'Moved back to waitlist at position #' + newPos);
+    loadWaitlistPanel(panelId);
+    loadWaitlistCounts();
+  } catch(e){
+    alert('⛔ Could not move this student back to the waitlist: ' + e.message);
+  }
+}
+
 async function renumberWaitlist(deviceType, campus){
   const campusFilter = campus === 'shared' ? '' : '&campus=eq.'+campus;
   const entries = await sbGet('device_requests',
